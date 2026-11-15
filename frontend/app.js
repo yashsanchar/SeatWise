@@ -1,6 +1,6 @@
 "use strict";
 const $ = (s, r = document) => r.querySelector(s);
-/* Advanced mode (open the page with ?advanced=1) shows the strategy choice, search-step counts, demo data,
+/* Advanced mode (open the page with ?advanced=1) shows the strategy choice, search-step counts,
    the Experiments tab and the strategy comparison export. Normal teachers never see them. */
 const ADVANCED = new URLSearchParams(location.search).get("advanced") === "1";
 if (!ADVANCED) document.querySelectorAll(".adv-only").forEach(el => el.remove());
@@ -26,6 +26,7 @@ function showAlert(msg, kind = "error") { Motion.toast(msg, kind); }
 /* Small constant icons for empty states (static markup, never built from user text). */
 const ICON = {
   upload: '<path d="M12 16V4m0 0L7 9m5-5 5 5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/>',
   seats: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
 };
 function emptyState(icon, title, text, btn) {
@@ -50,6 +51,14 @@ async function api(path, opts) {
 async function busy(btn, label, fn) {
   const old = btn.textContent; btn.disabled = true; btn.setAttribute("aria-busy", "true"); btn.textContent = label; showAlert("");   // aria-busy shows the spinner
   try { await fn(); } catch (e) { showAlert(e.message); } finally { btn.disabled = false; btn.removeAttribute("aria-busy"); btn.textContent = old; }
+}
+
+/* What is still missing before a plan can be made: a student list and/or the exam timetable (both start empty). */
+function missingData() {
+  const d = state.data, out = [];
+  if (!d || !d.students) out.push("a student list");
+  if (!d || !d.sessions.length) out.push("the exam timetable");
+  return out;
 }
 
 /* ---------- course colours: golden-angle hues, stable per course code; the code is also printed in each seat.
@@ -113,10 +122,17 @@ function renderPicked(inp) {
   const label = inp.closest(".file"), files = PICKED[inp.name], box = $(".file-name", label);
   label.classList.toggle("has", files.length > 0);
   box.replaceChildren();
+  box.removeAttribute("title"); box.removeAttribute("aria-label"); box.removeAttribute("role");
   if (!files.length) { box.textContent = "Choose file"; return; }
-  files.forEach((f, i) => box.append(h("span", { class: "pick" }, h("span", { class: "pick-name" }, f.name),
-    h("button", { type: "button", class: "x", title: "Remove " + f.name, "aria-label": "Remove " + f.name,
-      onclick: ev => { ev.preventDefault(); ev.stopPropagation(); files.splice(i, 1); renderPicked(inp); } }, "×"))));
+  /* One line of names, cut with an ellipsis, so a long name never makes the card taller or breaks mid-word.
+     The full list is in the tooltip and in the aria-label. Two or more files show "N files" above the names. */
+  const names = files.map(f => f.name), full = files.length > 1 ? `${files.length} files: ${names.join(", ")}` : names[0];
+  box.title = names.join("\n"); box.setAttribute("role", "group"); box.setAttribute("aria-label", full);
+  const clear = files.length > 1 ? `Remove all ${files.length} files` : "Remove " + names[0];
+  box.append(h("span", { class: "pick" },
+    h("span", { class: "pick-text" }, files.length > 1 ? h("b", { class: "pick-count" }, `${files.length} files`) : null, h("span", { class: "pick-name" }, names.join(", "))),
+    h("button", { type: "button", class: "x", title: clear, "aria-label": clear,
+      onclick: ev => { ev.preventDefault(); ev.stopPropagation(); PICKED[inp.name] = []; renderPicked(inp); } }, "×")));
   if (inp.multiple) box.append(h("span", { class: "pick-add" }, "+ Add another file"));
 }
 document.querySelectorAll(".file input").forEach(inp => inp.addEventListener("change", () => {
@@ -127,6 +143,12 @@ document.querySelectorAll(".file input").forEach(inp => inp.addEventListener("ch
   inp.value = "";                                      // so the same file can be chosen again after removing it
   renderPicked(inp);
 }));
+/* A file that has been loaded (or skipped, or refused) is taken off its card, so the next "Load files" does not read it again.
+   Needed now that the lists and the timetable are loaded one after the other. */
+function unpick(kind, file) {
+  PICKED[kind] = PICKED[kind].filter(f => f !== file);
+  renderPicked($(`.file input[name=${kind}]`));
+}
 const isPdf = f => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
 /* PDFs are routed to the preview screen; CSV/Excel go straight in (they are already tables). */
 $("#upload-form").addEventListener("submit", e => {
@@ -146,11 +168,13 @@ $("#upload-form").addEventListener("submit", e => {
       const fd = new FormData(); fd.append("students", sOther[0]);
       if (rOther.length) fd.append("rooms", rOther[0]); if (cOther.length) fd.append("schedule", cOther[0]);
       onLoaded(await api("/api/data", { method: "POST", body: fd }));
+      sOther.forEach(f => unpick("students", f)); rOther.forEach(f => unpick("rooms", f)); cOther.forEach(f => unpick("schedule", f));
     } else if (rOther.length || cOther.length) {       // only rooms / schedule tables (student lists are PDFs or already loaded)
       const fd = new FormData();
       if (rOther.length) fd.append("rooms", rOther[0]); if (cOther.length) fd.append("schedule", cOther[0]);
-      await api("/api/tables", { method: "POST", body: fd }); await afterEdit();
+      await api("/api/tables", { method: "POST", body: fd }); await Promise.all([loadRoomsTab(), loadTimetable()]); await afterEdit();
       showAlert("Files loaded. Generate the seating again to use them.", "info");
+      rOther.forEach(f => unpick("rooms", f)); cOther.forEach(f => unpick("schedule", f));
     }
     await Promise.all([loadRoomsTab(), loadTimetable()]);
     // every PDF: read it, show what was found, and wait for the teacher to confirm
@@ -158,11 +182,6 @@ $("#upload-form").addEventListener("submit", e => {
     if (queue.length) await runPreviews(queue);
   });
 });
-if (ADVANCED) $("#demo-btn").addEventListener("click", () => {
-  const fd = new FormData(); fd.append("demo", "true");
-  busy($("#demo-btn"), "Loading…", async () => { hidePreview(); onLoaded(await api("/api/data", { method: "POST", body: fd })); await Promise.all([loadRoomsTab(), loadTimetable()]); });
-});
-
 /* ---------- PDF preview / fix / confirm. One PDF at a time; the next one opens after the last is confirmed or skipped. */
 const P = { queue: [], done: 0, total: 0 };
 function hidePreview() { P.queue = []; $("#preview").replaceChildren(); }
@@ -177,9 +196,9 @@ async function nextPreview() {
   const fd = new FormData(); fd.append("kind", kind); fd.append("file", file);
   let res;
   try { res = await api("/api/pdf/preview", { method: "POST", body: fd }); }
-  catch (e) { P.queue.shift(); P.done++; showAlert(`${file.name}: ${e.message}`); return nextPreview(); }   // e.g. scanned PDF: say why, go on with the next file
+  catch (e) { P.queue.shift(); P.done++; unpick(kind, file); showAlert(`${file.name}: ${e.message}`); return nextPreview(); }   // e.g. scanned PDF: say why, go on with the next file
   const step = P.total > 1 ? ` (file ${P.done + 1} of ${P.total})` : "";
-  const finish = async (msg) => { P.queue.shift(); P.done++; if (msg) showAlert(msg, "info"); await nextPreview(); };
+  const finish = async (msg) => { P.queue.shift(); P.done++; unpick(kind, file); if (msg) showAlert(msg, "info"); await nextPreview(); };
   const skip = h("button", { class: "btn", type: "button", onclick: () => finish("Skipped " + file.name + ".") }, "Skip this file");
   if (kind === "students") box.append(studentPreview(res, step, skip, finish));
   else if (kind === "rooms") box.append(roomsPreview(res, step, skip, finish));
@@ -223,7 +242,8 @@ function studentPreview(res, step, skip, finish) {
       body: JSON.stringify({ group: sel.value, rows: rows.map(({ roll_no, name, include }) => ({ roll_no, name, include })) }) });
     state.data = d; state.plan = null; state.current = 0; state.courses = Object.keys(d.course_names || {}).sort();
     renderSummary(); renderPlan(); setDownloads(); await Promise.all([loadRoomsTab(), loadTimetable()]);
-    await finish(`Loaded ${rows.filter(r => r.include).length} students for ${sel.value}. ${d.students} students in total. Load the other lists, or go to Seating plan.`);
+    const next = d.sessions.length ? "Load the other lists, or go to Seating plan." : "Load the other lists and the exam timetable.";
+    await finish(`Loaded ${rows.filter(r => r.include).length} students for ${sel.value}. ${d.students} students in total. ${next}`);
   }));
   showGroup();
   return h("div", { class: "card preview" },
@@ -265,7 +285,9 @@ function onLoaded(d) {
   state.data = d; state.plan = null; state.current = 0;
   state.courses = Object.keys(d.course_names || {}).sort();
   renderSummary(); renderPlan(); setDownloads();
-  showAlert(`Loaded ${d.students} students, ${d.rooms.length} rooms and ${d.sessions.length} exam sessions. Next: generate the seating.`, "info");
+  const missing = missingData();
+  if (missing.length) return showAlert(`Loaded ${d.students} students. Still missing: ${missing.join(" and ")}.`, "info");
+  showAlert(`Loaded ${d.students} students and ${d.sessions.length} exam sessions. Next: generate the seating.`, "info");
   openTab("plan");
 }
 const paperCount = d => new Set(d.sessions.flatMap(s => s.courses)).size;
@@ -276,20 +298,16 @@ function table(head, rows) {
 function renderSummary() {
   const d = state.data, box = $("#summary"); box.replaceChildren();
   if (!d) return;
+  const papers = d.sessions.length ? paperCount(d) : null;          // Papers only count once a timetable is loaded
   box.append(h("div", { class: "card" },
     h("h2", {}, "What was loaded"),
     h("div", { class: "stats" },
-      [["Students", d.students], ["Papers", paperCount(d)], ["Rooms", d.rooms.length], ["Exam sessions", d.sessions.length]]
+      [["Students", d.students], ["Papers", papers]].filter(([, n]) => n !== null)
         .map(([l, n]) => h("div", { class: "stat" }, h("b", { "data-count": n }, n), l))),
     d.cohorts && d.cohorts.length ? h("div", { class: "legend", style: "margin-top:12px" }, h("span", { class: "muted", style: "margin:0" }, "Student lists loaded:"),
       d.cohorts.map(c => h("span", { class: "chip" }, `${c.group} · ${c.students}`,
         h("button", { class: "x", title: "Remove this list", "aria-label": "Remove list " + c.group, onclick: () => removeList(c.group) }, "×")))) : null,
-    d.warnings.length ? h("ul", { class: "warns" }, d.warnings.map(w => h("li", {}, w))) : null,
-    h("div", { class: "two", style: "margin-top:16px" },
-      h("div", {}, h("h3", { style: "margin-bottom:8px" }, "Rooms"),
-        table(["Room", "Name", "Size", "Seats", "Available"], d.rooms.map(r => [r.room_id, h("span", {}, r.name, r.provisional ? provTag() : null), `${r.rows} × ${r.cols}`, r.capacity, r.available ? "yes" : "no"]))),
-      h("div", {}, h("h3", { style: "margin-bottom:8px" }, "Exam schedule"),
-        table(["Date", "Time", "Papers"], d.sessions.map(s => [fmtDate(s.date), s.slot, s.courses.join(", ")]))))));
+    d.sessions.length && d.warnings.length ? h("ul", { class: "warns" }, d.warnings.map(w => h("li", {}, w))) : null));   // "papers with no students" only with a timetable
   Motion.countAll(box); Motion.enter(box.children);    // numbers count up, the card rises in
 }
 
@@ -297,7 +315,8 @@ async function removeList(group) {
   if (!confirm(`Remove the loaded list for ${group}?`)) return;
   try {
     const d = await api("/api/students/" + encodeURIComponent(group), { method: "DELETE" });
-    state.plan = null; state.data = d.rooms ? d : null; if (!state.data) state.courses = [];
+    state.plan = null; state.data = d.rooms ? d : null;
+    state.courses = state.data ? Object.keys(state.data.course_names || {}).sort() : [];
     renderSummary(); renderPlan(); setDownloads(); showAlert(`Removed the list for ${group}.`, "info");
   } catch (e) { showAlert(e.message); }
 }
@@ -321,13 +340,15 @@ function setDownloads() {
   });
   const cmp = $("#compare-btn");           // advanced only; needs loaded data, not a plan
   if (cmp) {
-    cmp.classList.toggle("off", !state.data);
-    if (state.data) cmp.setAttribute("href", "/api/compare?rule=" + encodeURIComponent($("#rule").value)); else cmp.removeAttribute("href");
+    const ready = !missingData().length;
+    cmp.classList.toggle("off", !ready);
+    if (ready) cmp.setAttribute("href", "/api/compare?rule=" + encodeURIComponent($("#rule").value)); else cmp.removeAttribute("href");
   }
 }
 $("#rule").addEventListener("change", () => setDownloads());
 $("#plan-btn").addEventListener("click", () => {
-  if (!state.data) return showAlert("Load your data on the Data tab first.");
+  const missing = missingData();
+  if (missing.length) return showAlert(`Load ${missing.join(" and ")} on the Data tab first.`);
   busy($("#plan-btn"), "Generating…", async () => {
     Motion.skeleton($("#plan-out"));                   // loading state while the API works
     try {
@@ -352,10 +373,11 @@ function renderPlan(mode) {
   const out = $("#plan-out"); out.replaceChildren(); out.removeAttribute("aria-busy");
   const p = state.plan;
   if (!p) {
-    out.append(state.data
+    const missing = missingData();
+    out.append(!missing.length
       ? emptyState("seats", "Ready to seat your students", "Choose how students may sit next to each other, then select Generate seating.",
           h("button", { class: "btn primary", type: "button", onclick: () => $("#plan-btn").click() }, "Generate seating"))
-      : emptyState("upload", "No data yet", "Load your files on the Data tab, then come back here to build the plan.",
+      : emptyState("upload", "Load data first", `Still missing: ${missing.join(" and ")}. Load ${missing.length > 1 ? "them" : "it"} on the Data tab, then come back here to build the plan.`,
           h("button", { class: "btn primary", type: "button", onclick: () => openTab("data") }, "Go to Data tab")));
     return;
   }
@@ -413,10 +435,14 @@ function roomCard(r, rule) {
 /* After rooms or the timetable change, the old plan is stale: drop it and refresh the counts on the Data tab. */
 async function afterEdit() {
   state.plan = null; state.current = 0;
-  try {
-    const r = await fetch("/api/data");
-    if (r.ok) { state.data = await r.json(); state.courses = Object.keys(state.data.course_names || {}).sort(); renderSummary(); }
-  } catch { /* data tab refreshes on next load */ }
+  if (state.data || T.loaded) {                        // with nothing loaded the server would answer 409 (a console error), so do not ask
+    try {
+      const r = await fetch("/api/data");
+      state.data = r.ok ? await r.json() : null;
+      state.courses = state.data ? Object.keys(state.data.course_names || {}).sort() : [];
+      renderSummary();
+    } catch { /* data tab refreshes on next load */ }
+  }
   renderPlan(); setDownloads();
 }
 const unsaved = () => (R.draft.length && JSON.stringify(R.draft) !== R.saved) || (T.rows.length && JSON.stringify(T.rows) !== T.saved);
@@ -508,12 +534,13 @@ function renderRoomEditor() {
 }
 
 /* ---------- TIMETABLE tab: one row per paper; edit any cell, add or delete rows, save */
-const T = { rows: [], saved: "", days: 0, warnings: [], edit: new Set(), groupBy: "date" };
+const T = { rows: [], saved: "", days: 0, warnings: [], edit: new Set(), groupBy: "date", loaded: false };
 async function loadTimetable() {
   try { setTimetable(await api("/api/timetable")); } catch (e) { showAlert(e.message); }
 }
 function setTimetable(d) {
   T.rows = d.rows.map(r => ({ date: r.date, slot: r.slot, course: r.course, course_name: r.course_name, group: r.group || "" }));
+  T.loaded = d.rows.length > 0;                        // false = no timetable yet: the tab shows an empty state, not the editor
   T.saved = JSON.stringify(T.rows); T.days = d.days; T.warnings = d.warnings || []; T.edit = new Set();
   renderTimetable();
 }
@@ -529,6 +556,11 @@ const ttIcon = name => { const s = h("span", { class: "ico", "aria-hidden": "tru
 const byText = (a, b) => (a || "￿").localeCompare(b || "￿", undefined, { numeric: true, sensitivity: "base" });
 function renderTimetable() {
   const out = $("#timetable-out"); out.replaceChildren();
+  if (!T.loaded) {
+    out.append(emptyState("calendar", "No timetable loaded", "Upload the exam timetable in the Exam schedule box on the Data tab. It will appear here, where you can check and change it.",
+      h("button", { class: "btn primary", type: "button", onclick: () => openTab("data") }, "Go to Data tab")));
+    return;
+  }
   const count = h("span", { class: "muted", style: "margin:0" });
   function updateCount() { count.textContent = `${T.rows.filter(r => r.date && r.course).length} papers on ${new Set(T.rows.filter(r => r.date && r.course).map(r => r.date)).size} exam days`; }
   const close = row => { T.edit.delete(row); renderTimetable(); };
@@ -631,9 +663,9 @@ async function loadLab() {
   state.labBusy = false;
 }
 
-/* ---------- start: dropdowns, and restore the loaded data if the server still has it */
+/* ---------- start: every visit begins empty. POST /api/reset clears the server (also when it kept running), then the screens are loaded from it. */
 (async function init() {
+  try { await api("/api/reset", { method: "POST" }); } catch (e) { showAlert(e.message); }
   await loadOptions(); renderPlan(); setDownloads();
-  await Promise.all([loadRoomsTab(), loadTimetable()]);
-  try { const d = await fetch("/api/data"); if (d.ok) { const j = await d.json(); state.data = j; state.courses = Object.keys(j.course_names || {}).sort(); renderSummary(); renderPlan(); setDownloads(); } } catch { /* nothing loaded yet */ }
+  await Promise.all([loadRoomsTab(), loadTimetable()]);   // rooms = the built-in ones, timetable = empty state
 })();

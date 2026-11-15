@@ -1,4 +1,4 @@
-"""Exam seating arrangement backend (Python standard library only)."""
+"""SeatWise: exam seating arrangement backend (Python standard library only)."""
 
 from .cohorts import expand_cohorts, papers_of_group, timetable_groups
 from .compare import compare_strategies, export_comparison_csv
@@ -6,6 +6,7 @@ from .errors import (DataFormatError, InfeasibleArrangementError, InsufficientCa
                      SeatingError)
 from .io_csv import (build_sessions, combine, export_csv, export_json, export_text, load_all, load_rooms,
                      load_schedule, load_schedule_rows, load_students)
+from .io_notice import export_course_list, export_room_list
 from .models import ExamData, ExamSession, Room, RoomPlan, Seat, SessionPlan, Student
 from .planner import ExamPlanner
 from .presets import (default_rooms, default_timetable, room_to_spec, rooms_from_specs, rows_from_sessions,
@@ -22,6 +23,6 @@ __all__ = [
     "ExamSession", "FourWayRule", "GreedyStrategy", "HorizontalRule", "HybridStrategy",
     "InfeasibleArrangementError", "InsufficientCapacityError", "Room", "RoomPlan", "Seat",
     "SeatingError", "SeatingStrategy", "SessionPlan", "Student", "export_csv", "export_json",
-    "export_text", "find_conflicts", "get_rule", "get_strategy", "load_all", "load_rooms",
+    "export_text", "export_course_list", "export_room_list", "find_conflicts", "get_rule", "get_strategy", "load_all", "load_rooms",
     "load_schedule", "load_students", "rule_names", "strategy_names",
 ]

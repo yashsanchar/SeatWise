@@ -36,9 +36,10 @@ MIN_CHARS_PER_PAGE = 20                # fewer characters than this on average =
 
 # Message shown for a PDF with no readable text, by kind of file.
 UNREADABLE = {
-    "students": "This PDF has no readable text (it looks like a scan or photo). Upload the student list as a CSV file instead.",
-    "rooms": "This PDF has no readable text (it looks like a scan or photo). Use the Rooms tab to set up the rooms, or upload a CSV.",
-    "schedule": "This PDF has no readable text (it looks like a scan or photo). Use the timetable table in the app or upload a CSV.",
+    "students": "This PDF is a scan or photo and has no readable text. Upload the student list as a CSV or Excel file instead.",
+    "rooms": "This PDF is a scan or photo and has no readable text. Use the Rooms tab to set up the rooms, or upload a CSV or Excel file.",
+    "schedule": "This PDF is a scan or photo and has no readable text. Upload the timetable as a CSV or Excel file "
+                "(an example is data/sample/timetable_nov_dec_2026.csv).",
 }
 
 

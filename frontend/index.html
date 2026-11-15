@@ -14,7 +14,7 @@
   if (meta) meta.setAttribute("content", theme === "light" ? "#f6efe2" : "#16130f");
 })();
 </script>
-<title>Exam Seating Planner</title>
+<title>SeatWise</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2316130f'/%3E%3Crect x='6' y='6' width='9' height='9' rx='2.5' fill='%23e9a455'/%3E%3Crect x='17' y='6' width='9' height='9' rx='2.5' fill='%23e9a455' opacity='.4'/%3E%3Crect x='6' y='17' width='9' height='9' rx='2.5' fill='%23e9a455' opacity='.4'/%3E%3Crect x='17' y='17' width='9' height='9' rx='2.5' fill='%23e9a455'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -26,9 +26,9 @@
 <header class="top">
   <div class="wrap">
     <div class="navbar">
-      <a class="brand" href="./" aria-label="Exam Seating Planner, home">
+      <a class="brand" href="./" aria-label="SeatWise, home">
         <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="4" y="4" width="11" height="11" rx="3.2"/><rect class="dim" x="17" y="4" width="11" height="11" rx="3.2"/><rect class="dim" x="4" y="17" width="11" height="11" rx="3.2"/><rect x="17" y="17" width="11" height="11" rx="3.2"/></svg>
-        <span class="brand-name">Exam Seating Planner</span>
+        <span class="brand-name">SeatWise</span>
       </a>
       <nav class="tabs" role="tablist" aria-label="Sections">
         <span class="tab-ind" aria-hidden="true"></span>
@@ -54,7 +54,7 @@
 
 <!-- Page heading: a visually hidden h1 (screen readers) and the small eyebrow label -->
 <section class="wrap hero">
-  <h1 class="sr-only">Exam Seating Planner</h1>
+  <h1 class="sr-only">SeatWise</h1>
   <span class="eyebrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>SDSF · End-sem exam seating</span>
 </section>
 
@@ -63,7 +63,7 @@
   <section id="tab-data" class="panel" role="tabpanel" aria-labelledby="tabbtn-data">
     <div class="card">
       <h2>Load exam data</h2>
-      <p class="muted">Load the student list. The rooms and the exam timetable are kept in the <b>Rooms</b> and <b>Timetable</b> tabs, where you can check and change them. PDF, CSV or Excel files all work. Every PDF is shown for checking before anything is loaded.</p>
+      <p class="muted">Load the student lists and the exam timetable. Nothing is loaded until you do it. The rooms start with the built-in rooms on the <b>Rooms</b> tab; the loaded timetable appears on the <b>Timetable</b> tab, where you can check and change it. PDF, CSV or Excel files all work. Every PDF is shown for checking before anything is loaded.</p>
       <form id="upload-form" class="files">
         <label class="file"><span class="file-title">Students</span>
           <span class="hint">PDF lists (one per batch, you can choose several) or one CSV/Excel file with Roll No, Student Name, Paper Code</span>
@@ -74,12 +74,11 @@
           <input type="file" name="rooms" accept=".pdf,.csv,.txt,.xlsx">
           <span class="file-name">Choose file</span></label>
         <label class="file"><span class="file-title">Exam schedule</span>
-          <span class="hint">Optional. PDF (with readable text), CSV or Excel: Date, Slot, Paper Code. Replaces the Timetable tab.</span>
+          <span class="hint">PDF (with readable text), CSV or Excel: Date, Slot, Paper Code, Group. Fills the Timetable tab.</span>
           <input type="file" name="schedule" accept=".pdf,.csv,.txt,.xlsx">
           <span class="file-name">Choose file</span></label>
         <div class="row">
           <button class="btn primary" type="submit">Load files</button>
-          <button class="btn adv-only" type="button" id="demo-btn">Use demo data</button>
         </div>
       </form>
     </div>
@@ -109,6 +108,8 @@
       <span class="dl">Download
         <a class="btn small" data-fmt="csv" title="Seating list for Excel">Seating list (CSV)</a>
         <a class="btn small" data-fmt="txt" title="Room layouts you can print">Room layouts (text)</a>
+        <a class="btn small" data-fmt="notice-courses" title="Notice-board list: roll numbers under each course with room and seat (HTML file, print it from the browser)">Course-wise list (printable)</a>
+        <a class="btn small" data-fmt="notice-rooms" title="Notice-board list: roll numbers in each room with course and seat (HTML file, print it from the browser)">Room-wise list (printable)</a>
         <a class="btn small adv-only" data-fmt="json">JSON</a>
         <a class="btn small adv-only" id="compare-btn" title="Runs all three strategies and saves search steps and time side by side">Compare strategies (CSV)</a></span>
     </div>

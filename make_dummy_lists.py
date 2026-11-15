@@ -126,7 +126,7 @@ def write_pdf(path: Path, title: str, rolls: list[str], names: list[str]) -> Non
     pages += [rest[i:i + NEXT_PAGE_ROWS] for i in range(0, len(rest), NEXT_PAGE_ROWS)]
     c = canvas.Canvas(str(path), pagesize=PAGE)
     c.setTitle(title)
-    c.setAuthor("Exam Seating Planner (dummy data generator)")
+    c.setAuthor("SeatWise (dummy data generator)")
     for n, chunk in enumerate(pages):
         if n == 0:
             draw_table(c, [[title] + [""] * 5, HEADER] + chunk, title_row=True)

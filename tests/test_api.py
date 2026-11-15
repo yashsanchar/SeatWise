@@ -22,6 +22,10 @@ class ApiTests(unittest.TestCase):
         app_module.state.__init__()      # fresh in-memory state for every test
         self.client = TestClient(app_module.app)
 
+    def load_default_timetable(self):
+        """The built-in printed timetable is not loaded at startup any more: tests that need it ask for it."""
+        return self.client.post("/api/timetable/reset")
+
     def load_demo(self):
         return self.client.post("/api/data", data={"demo": "true"})
 
@@ -52,6 +56,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("student", r.json()["detail"].lower())
 
     def test_students_only_uses_builtin_rooms_and_timetable(self):
+        self.load_default_timetable()
         r = self.client.post("/api/data", files={"students": sample_files()["students"]})
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -97,6 +102,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(len(self.client.get("/api/rooms").json()["rooms"]), 4)
 
     def test_editing_rooms_or_timetable_drops_the_old_plan(self):
+        self.load_default_timetable()
         self.client.post("/api/data", files={"students": ("students.csv", (SAMPLE / "students_placeholder.csv").read_bytes(), "text/csv")})
         self.assertEqual(self.client.post("/api/plan", json={}).json()["failed_sessions"], 0)
         self.assertEqual(self.client.get("/api/download/csv").status_code, 200)
@@ -107,6 +113,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/download/csv").status_code, 409)
 
     def test_plan_uses_edited_rooms(self):
+        self.load_default_timetable()
         self.client.post("/api/data", files={"students": ("students.csv", (SAMPLE / "students_placeholder.csv").read_bytes(), "text/csv")})
         rooms = self.client.get("/api/rooms").json()["rooms"]
         for r in rooms[1:]:
@@ -117,11 +124,13 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(any(s["error"] for s in body["sessions"]))
 
     def test_plan_marks_provisional_rooms(self):
+        self.load_default_timetable()
         self.client.post("/api/data", files={"students": ("students.csv", (SAMPLE / "students_placeholder.csv").read_bytes(), "text/csv")})
         body = self.client.post("/api/plan", json={}).json()
         self.assertTrue(all(r["provisional"] for s in body["sessions"] for r in s["rooms"]))
 
     def test_timetable_get_save_reset(self):
+        self.load_default_timetable()
         t = self.client.get("/api/timetable").json()
         self.assertEqual((len(t["rows"]), t["days"], t["sessions"]), (36, 12, 12))
         rows = t["rows"]
@@ -230,6 +239,7 @@ class PdfApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/data").status_code, 409)          # still nothing loaded
 
     def test_confirm_loads_and_plans_with_no_conflicts(self):
+        self.client.post("/api/timetable/reset")          # the built-in timetable is not loaded at startup any more
         summary = self.confirm_all_lists()
         self.assertEqual(summary["students"], 163)
         self.assertEqual({c["group"] for c in summary["cohorts"]},
@@ -304,6 +314,105 @@ class PdfApiTests(unittest.TestCase):
         r = self.client.post("/api/data", files={"students": ("s.xlsx", buf.getvalue(), "application/octet-stream")})
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["students"], 2)
+
+DUMMY_7 = "DUMMY_MTECH_AIDS_2023-2028_7TH_SEM.pdf"
+DUMMY_9 = "DUMMY_MTECH_AIDS_2022-2027_9TH_SEM.pdf"
+NO_STUDENTS = "No student list loaded yet. Load it on the Data tab first."
+NO_TIMETABLE = "No exam timetable loaded yet. Load it on the Data tab first."
+
+
+class EmptyStartTests(unittest.TestCase):
+    """The server starts with no timetable and no student lists (only the built-in rooms), every route copes with that,
+    and POST /api/reset goes back to that state."""
+
+    def setUp(self):
+        app_module.state.__init__()
+        self.client = TestClient(app_module.app)
+
+    def confirm(self, name):
+        body = self.client.post("/api/pdf/preview", data={"kind": "students"}, files={"file": pdf_file(name)}).json()
+        r = self.client.post("/api/students/confirm", json={"group": body["suggested_group"], "rows": body["rows"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_empty_start(self):
+        self.assertEqual(app_module.state.timetable, [])
+        self.assertFalse(app_module.state.has_students)
+        self.assertEqual(self.client.get("/api/timetable").json(), {"rows": [], "days": 0, "sessions": 0, "warnings": []})
+        rooms = self.client.get("/api/rooms").json()["rooms"]                      # the built-in rooms stay
+        self.assertEqual([x["room_id"] for x in rooms], ["B-002", "B-003", "B-004", "B-005"])
+        self.assertEqual(self.client.get("/api/data").status_code, 409)           # nothing loaded at all
+
+    def test_every_route_with_empty_state(self):
+        c = self.client
+        self.assertIn("rules", c.get("/api/options").json())
+        r = c.get("/api/data")
+        self.assertEqual((r.status_code, r.json()["detail"]), (409, NO_STUDENTS))
+        r = c.post("/api/plan", json={})
+        self.assertEqual((r.status_code, r.json()["detail"]), (409, NO_STUDENTS))
+        for url in ("/api/download/csv", "/api/download/json", "/api/download/txt", "/api/compare"):
+            r = c.get(url)
+            self.assertEqual((url, r.status_code, r.json()["detail"]), (url, 409, NO_STUDENTS))
+        self.assertEqual(c.delete("/api/students/M.Tech%20sem%207").status_code, 404)
+        self.assertEqual(c.put("/api/timetable", json={"rows": []}).status_code, 400)   # an empty table is refused, nothing crashes
+        self.assertEqual(c.post("/api/tables").status_code, 400)
+        self.assertEqual(c.get("/api/rooms").status_code, 200)
+        self.assertEqual(c.post("/api/rooms/reset").status_code, 200)
+        self.assertEqual(c.post("/api/timetable/reset").status_code, 200)               # loads the built-in one on request
+
+    def test_students_before_timetable(self):
+        summary = self.confirm(DUMMY_7)
+        self.assertEqual((summary["students"], summary["sessions"], summary["warnings"]), (55, [], []))
+        self.assertEqual([c["group"] for c in summary["cohorts"]], ["M.Tech sem 7"])
+        self.assertEqual(len(summary["rooms"]), 4)                                     # same shape as always
+        self.assertEqual(self.client.get("/api/data").json()["students"], 55)
+        for r in (self.client.post("/api/plan", json={}), self.client.get("/api/download/csv"), self.client.get("/api/compare")):
+            self.assertEqual((r.status_code, r.json()["detail"]), (409, NO_TIMETABLE))
+        self.assertEqual(self.client.delete("/api/students/M.Tech%20sem%207").json(), {"students": 0, "cohorts": []})
+
+    def test_timetable_before_students(self):
+        self.client.post("/api/timetable/reset")
+        summary = self.client.get("/api/data").json()
+        self.assertEqual((summary["students"], len(summary["sessions"]), summary["warnings"]), (0, 12, []))   # no 'no students' noise
+        r = self.client.post("/api/plan", json={})
+        self.assertEqual((r.status_code, r.json()["detail"]), (409, NO_STUDENTS))
+
+    def test_no_students_warning_only_once_a_timetable_is_loaded(self):
+        self.assertEqual(self.confirm("mba_ba_2025-27.pdf")["warnings"], [])
+        self.client.post("/api/timetable/reset")
+        warnings = self.client.get("/api/data").json()["warnings"]
+        self.assertTrue(any(w.startswith("Papers in the schedule with no students") for w in warnings), warnings)
+
+    def test_reset_clears_everything(self):
+        c = self.client
+        c.post("/api/timetable/reset")
+        self.confirm(DUMMY_7)
+        self.assertEqual(c.post("/api/plan", json={}).status_code, 200)
+        rooms = c.get("/api/rooms").json()["rooms"]
+        c.put("/api/rooms", json={"rooms": rooms[:1]})                                  # change the rooms too
+        self.assertEqual(c.post("/api/reset").status_code, 200)
+        self.assertEqual(c.get("/api/data").status_code, 409)
+        self.assertEqual(c.get("/api/timetable").json()["rows"], [])
+        self.assertEqual(c.get("/api/download/csv").status_code, 409)
+        self.assertEqual([x["room_id"] for x in c.get("/api/rooms").json()["rooms"]], ["B-002", "B-003", "B-004", "B-005"])
+        self.assertEqual(c.post("/api/reset").status_code, 200)                         # also fine when already empty
+
+    def test_plan_after_loading_students_and_timetable(self):
+        names = ["mba_ba_2025-27.pdf", "msc_dsa_2025-27.pdf", "mtech_2025-30.pdf", "mtech_2024-29.pdf", DUMMY_7, DUMMY_9]
+        for name in names:
+            self.confirm(name)
+        self.assertEqual(self.client.post("/api/plan", json={}).status_code, 409)       # lists alone are not enough
+        self.client.post("/api/timetable/reset")
+        summary = self.client.get("/api/data").json()
+        self.assertEqual(summary["students"], 163 + 55 + 45)
+        self.assertEqual(summary["warnings"], [])
+        plan = self.client.post("/api/plan", json={"rule": "fourway", "strategy": "hybrid"})
+        self.assertEqual(plan.status_code, 200, plan.text)
+        body = plan.json()
+        self.assertEqual((body["failed_sessions"], body["total_conflicts"]), (0, 0))
+        self.assertEqual(len(body["sessions"]), 12)
+        self.assertEqual(self.client.get("/api/download/csv").status_code, 200)
+
 
 if __name__ == "__main__":
     unittest.main()

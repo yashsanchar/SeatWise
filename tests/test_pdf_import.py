@@ -58,7 +58,7 @@ class StudentPdfTests(unittest.TestCase):
 
     def test_scanned_pdf_is_rejected_with_plain_message(self):
         scanned = PDFS / "timetable_scanned.pdf"
-        for kind, hint in (("students", "CSV"), ("schedule", "timetable table"), ("rooms", "Rooms tab")):
+        for kind, hint in (("students", "CSV"), ("schedule", "timetable_nov_dec_2026.csv"), ("rooms", "Rooms tab")):
             with self.assertRaises(P.PdfProblem) as cm:
                 if kind == "students":
                     P.parse_student_pdf(scanned)

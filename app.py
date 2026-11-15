@@ -8,10 +8,12 @@ rooms/schedule PDFs: preview, then the existing PUT /api/rooms or PUT /api/timet
   1. GET  /api/options            -> rule + strategy names for the dropdowns
   2. POST /api/data               -> upload the student list (rooms and schedule files are optional) -> summary
      GET/PUT/POST-reset /api/rooms and /api/timetable -> the in-app room editor and timetable table
+     (the timetable starts empty; POST /api/timetable/reset loads the built-in printed one)
   3. POST /api/plan               -> {"rule": ..., "strategy": ...} -> seating for every session
-  4. GET  /api/download/csv|json|txt
+  4. GET  /api/download/csv|json|txt|notice-courses|notice-rooms
   5. GET  /api/compare?rule=...   -> side-by-side CSV of all 3 strategies (advanced)
   6. GET  /api/benchmarks         -> DAA + Computer Architecture experiment results (optional)
+  POST /api/reset                 -> back to the empty start (the page calls it on every load)
 
 The routes are thin: all real work is done by the `seating` package.
 """
@@ -28,8 +30,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from seating import (ExamData, ExamPlanner, SeatingError, SessionPlan, build_sessions, combine,
-                     default_rooms, default_timetable, expand_cohorts, export_comparison_csv, export_csv, export_json,
-                     export_text, find_conflicts, get_rule, get_strategy, load_rooms, load_schedule_rows,
+                     default_rooms, default_timetable, expand_cohorts, export_comparison_csv, export_course_list, export_csv, export_json,
+                     export_room_list, export_text, find_conflicts, get_rule, get_strategy, load_rooms, load_schedule_rows,
                      load_students, room_to_spec, rooms_from_specs, rows_from_sessions, rule_names, strategy_names,
                      timetable_groups, timetable_rows_clean)
 from seating import benchmarks
@@ -46,43 +48,64 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB per file is far more than a college n
 class AppState:
     """Holds what is currently loaded and the latest plan (in memory, one teacher at a time).
 
-    Students come from an upload. Rooms and the timetable always exist: they start with the built-in
-    (provisional) rooms and the printed timetable and are changed in the app or replaced by an upload.
+    Everything starts empty: no student list and no timetable. Only the rooms start filled with the built-in
+    (provisional) rooms. The timetable comes from an upload (or POST /api/timetable/reset, which loads the built-in
+    one) and is changed in the app. reset() brings back this empty start.
     """
 
     def __init__(self) -> None:
+        self.benchmark_rows: Optional[List[dict]] = None   # slow to compute and independent of the data: kept by reset()
+        self.reset()
+
+    def reset(self) -> None:
         self.students: Optional[tuple] = None        # (students, course_names, warnings) from a CSV/Excel upload
         # student lists confirmed from PDFs: group name -> [(roll_no, name, is_placeholder)]. A student here is
         # enrolled in every paper the timetable lists for the group, so editing the timetable updates them too.
         self.cohorts: Dict[str, List[tuple]] = {}
         self.rooms = default_rooms()
-        self.timetable: List[Dict[str, str]] = default_timetable()
+        self.timetable: List[Dict[str, str]] = []    # empty until a timetable is loaded
         self.plans: List[SessionPlan] = []
         self.rule_name: str = ""
         self.strategy_name: str = ""
-        self.benchmark_rows: Optional[List[dict]] = None
 
     @property
-    def data(self) -> Optional[ExamData]:
-        """Everything the planner needs, joined fresh from the three parts. None until students are loaded."""
-        if self.students is None and not self.cohorts:
-            return None
+    def has_students(self) -> bool:
+        return self.students is not None or bool(self.cohorts)
+
+    @property
+    def data(self) -> ExamData:
+        """Everything the planner needs, joined fresh from the three parts. Works with parts missing:
+        no timetable -> no sessions; no students -> no students and no 'papers with no students' warning."""
+        if not self.timetable:
+            return ExamData([], self.rooms, [])
+        sessions, c_names, c_warnings = build_sessions(self.timetable, "timetable row", 1)
+        if not self.has_students:             # skip combine(): with no students every paper would be "without students"
+            return ExamData([], self.rooms, sessions, c_names, list(c_warnings))
         if self.students is not None:
             students, s_names, s_warnings = self.students
         else:
             students, s_names, s_warnings = expand_cohorts(self.cohorts, self.timetable)
-        sessions, c_names, c_warnings = build_sessions(self.timetable, "timetable row", 1)
         return combine(students, s_names, s_warnings, self.rooms, sessions, c_names, c_warnings)
+
+    def student_count(self) -> int:
+        """Students loaded. Without a timetable the lists are counted directly (no paper is known yet)."""
+        if self.timetable and self.has_students:
+            return len({s.roll_no for s in self.data.students})
+        if self.students is not None:
+            return len({s.roll_no for s in self.students[0]})
+        return len({roll.upper() for people in self.cohorts.values() for roll, _name, _placeholder in people})
 
     def invalidate_plan(self) -> None:
         self.plans = []          # an old plan no longer matches the changed data
         self.rule_name = self.strategy_name = ""
 
     def require_data(self) -> ExamData:
-        data = self.data
-        if data is None:
+        """Both a student list and a timetable are needed to seat anyone."""
+        if not self.has_students:
             raise HTTPException(409, "No student list loaded yet. Load it on the Data tab first.")
-        return data
+        if not self.timetable:
+            raise HTTPException(409, "No exam timetable loaded yet. Load it on the Data tab first.")
+        return self.data
 
     def require_plan(self) -> ExamData:
         data = self.require_data()
@@ -92,7 +115,7 @@ class AppState:
 
 
 state = AppState()
-app = FastAPI(title="Exam Seating Arrangement API",
+app = FastAPI(title="SeatWise API",
               description="No two students of the same course sit beside each other.")
 
 
@@ -151,6 +174,12 @@ def _file_kind(filename: str, content: bytes) -> str:
     return "csv"
 
 
+def _known_groups() -> List[str]:
+    """Groups a student list can belong to: the groups in the timetable, or (no timetable loaded yet) the built-in
+    group names, so a student list can be loaded before the timetable."""
+    return timetable_groups(state.timetable) or timetable_groups(default_timetable())
+
+
 def _given(upload: Optional[UploadFile]) -> bool:
     """True when the browser really sent a file (an untouched file box arrives with an empty name)."""
     return upload is not None and bool(upload.filename)
@@ -159,7 +188,7 @@ def _given(upload: Optional[UploadFile]) -> bool:
 def _summary(data: ExamData) -> dict:
     return {
         "enrolment_rows": len(data.students),
-        "students": len({s.roll_no for s in data.students}),
+        "students": state.student_count(),
         "rooms": [
             {"room_id": r.room_id, "name": r.name, "rows": r.rows, "cols": r.cols,
              "capacity": r.capacity, "available": r.available, "provisional": r.provisional}
@@ -213,12 +242,15 @@ def upload_data(
     if new_rows is not None:
         state.timetable = new_rows
     state.invalidate_plan()
-    return _summary(state.require_data())
+    return _summary(state.data)
 
 
 @app.get("/api/data")
 def get_data() -> dict:
-    return _summary(state.require_data())
+    """What is loaded. 409 only when nothing at all is loaded; a timetable alone or students alone still gives a summary."""
+    if not state.has_students and not state.timetable:
+        raise HTTPException(409, "No student list loaded yet. Load it on the Data tab first.")
+    return _summary(state.data)
 
 
 @app.post("/api/tables")
@@ -265,7 +297,7 @@ def pdf_preview(kind: str = Form(...), file: UploadFile = File(...)) -> dict:
             path.write_bytes(content)
             if kind == "students":
                 out = pdf_import.parse_student_pdf(path).to_dict()
-                out["groups"] = timetable_groups(state.timetable)
+                out["groups"] = _known_groups()
                 out["already_loaded"] = sorted(state.cohorts)
             else:
                 csv_path = folder / "table.csv"
@@ -289,7 +321,7 @@ def confirm_students(body: ConfirmStudentsBody) -> dict:
     group = body.group.strip()
     if not group:
         raise HTTPException(400, "Choose which group this list belongs to (for example M.Tech sem 3).")
-    if group not in timetable_groups(state.timetable):
+    if group not in _known_groups():
         raise HTTPException(400, f"The timetable has no group called '{group}'. Pick one from the list, or add the "
                                  "group name to the Group column on the Timetable tab first.")
     people: List[tuple] = []
@@ -310,7 +342,7 @@ def confirm_students(body: ConfirmStudentsBody) -> dict:
     state.cohorts[group] = people
     state.students = None                 # lists from PDFs replace any CSV student file
     state.invalidate_plan()
-    return _summary(state.require_data())
+    return _summary(state.data)
 
 
 @app.delete("/api/students/{group}")
@@ -320,9 +352,9 @@ def remove_group(group: str) -> dict:
         raise HTTPException(404, f"No list loaded for '{group}'.")
     del state.cohorts[group]
     state.invalidate_plan()
-    if not state.cohorts:
+    if not state.cohorts and not state.timetable:
         return {"students": 0, "cohorts": []}
-    return _summary(state.require_data())
+    return _summary(state.data)
 
 
 @app.get("/api/rooms")
@@ -350,6 +382,8 @@ def reset_rooms() -> dict:
 
 
 def _timetable_view() -> dict:
+    if not state.timetable:                  # nothing loaded: same shape, all zeros
+        return {"rows": [], "days": 0, "sessions": 0, "warnings": []}
     sessions, _names, warnings = build_sessions(state.timetable, "timetable row", 1)
     return {"rows": state.timetable, "days": len({s.date for s in sessions}), "sessions": len(sessions),
             "warnings": warnings}
@@ -413,16 +447,20 @@ def make_plan(req: PlanRequest) -> dict:
 
 
 @app.get("/api/download/{fmt}")
-def download(fmt: str) -> Response:
-    """fmt = csv | json | txt  -> the latest plan as a file."""
+def download(fmt: str, names: bool = False) -> Response:
+    """fmt = csv | json | txt  -> the latest plan as a file.
+    fmt = notice-courses | notice-rooms -> printable HTML notice-board lists (roll numbers only;
+    add ?names=1 to print names too)."""
     data = state.require_plan()
     writers = {
         "csv": (lambda p: export_csv(state.plans, data, p), "text/csv", "seating_all.csv"),
         "json": (lambda p: export_json(state.plans, data, p), "application/json", "plan.json"),
         "txt": (lambda p: export_text(state.plans, p), "text/plain", "grids.txt"),
+        "notice-courses": (lambda p: export_course_list(state.plans, data, p, names), "text/html", "course_wise_list.html"),
+        "notice-rooms": (lambda p: export_room_list(state.plans, data, p, names), "text/html", "room_wise_list.html"),
     }
     if fmt not in writers:
-        raise HTTPException(404, "Format must be csv, json or txt")
+        raise HTTPException(404, "Format must be csv, json, txt, notice-courses or notice-rooms")
     write, media_type, filename = writers[fmt]
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / filename
@@ -463,6 +501,13 @@ def get_benchmarks() -> dict:
         "note": "Python's interpreter overhead hides most cache effects; the direction of the "
                 "results is visible but the gaps are smaller than they would be in C or Java.",
     }
+
+
+@app.post("/api/reset")
+def reset_all() -> dict:
+    """Back to the empty start: no students, no plan, no timetable, and the built-in rooms. The page calls this on every load."""
+    state.reset()
+    return {"reset": True, "rooms": len(state.rooms)}
 
 
 # --------------------------------------------------------------------------- frontend

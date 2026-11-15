@@ -22,7 +22,7 @@ SAMPLE = Path(__file__).parent / "data" / "sample"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Exam seating arrangement (no two same-course students side by side)")
+    p = argparse.ArgumentParser(description="SeatWise: exam seating arrangement (no two same-course students side by side)")
     p.add_argument("--students", help="students CSV (roll, name, course)")
     p.add_argument("--rooms", help="rooms CSV (room, rows, cols, blocked / layout)")
     p.add_argument("--schedule", help="exam schedule CSV (date, slot, course)")

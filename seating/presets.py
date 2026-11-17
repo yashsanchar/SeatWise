@@ -17,28 +17,47 @@ from .models import ExamSession, Room
 MAX_ROOM_SIDE = 40          # sanity limit for rows / columns in the editor
 
 # --------------------------------------------------------------------------- rooms
-# B-002..B-004: three blocks running front to back (left, middle, right), 6 rows x 9 columns.
-#   columns 1-2 = left block (benches of 2), 3 = aisle, 4-6 = middle block (benches of 3),
-#   7 = aisle, 8-9 = right block (benches of 2). Back row of the middle block has no seat.
-_BLOCKS_LAYOUT = ["110111011"] * 5 + ["110000011"]            # 5 rows x 7 seats + back row of 4 = 39 seats
-_BLOCKS_NOTE = ("Provisional. Three blocks front to back: left benches of 2 (6 deep), middle benches of 3 "
-                "(5 deep), right benches of 2 (6 deep). The two aisles and the back row of the middle block "
-                "are 'no seat'. An earlier description said 8 outer benches and 6 middle ones - please "
-                "check which is right and correct the layout.")
-# B-005: pure guess - 2 rows of five 2-seat benches (20 seats) + single flip-table chairs (18 here).
-_B005_LAYOUT = ["1111111111", "1111111111", "0011111100", "0011111100", "0011111100"]
-_B005_NOTE = ("Provisional guess only: 2 rows of five 2-seat benches plus about 15-20 single flip-table "
-              "chairs (18 drawn here). Replace with the real layout.")
+# Every room is described as "files" (what people in a classroom call rows): a file runs from the front of the
+# room to the back and is a stack of benches. Each file is (seats per bench, number of benches). Files are listed
+# left to right and a walking lane (a "no seat" column) is drawn between neighbouring files. A file that has fewer
+# benches than the deepest one starts at the front. The grid is then one string of 1/0 per row, front row first.
+def _files_layout(*files: tuple) -> List[str]:
+    depth = max(benches for _width, benches in files)
+    rows = []
+    for r in range(depth):
+        rows.append("0".join(("1" * width if r < benches else "0" * width) for width, benches in files))
+    return rows
+
+
+_PROVISIONAL = "Provisional: described from memory, to be confirmed by walking into the room. "
+
+
+def _spec(room_id: str, block: str, layout: List[str], note: str) -> Dict[str, Any]:
+    return {"room_id": room_id, "name": f"{room_id} (Block {block})", "layout": layout, "available": True,
+            "provisional": True, "note": f"Block {block}. {_PROVISIONAL}{note}"}
+
 
 DEFAULT_ROOM_SPECS: List[Dict[str, Any]] = [
-    {"room_id": "B-002", "name": "Room B-002", "layout": _BLOCKS_LAYOUT, "available": True,
-     "provisional": True, "note": _BLOCKS_NOTE},
-    {"room_id": "B-003", "name": "Room B-003", "layout": _BLOCKS_LAYOUT, "available": True,
-     "provisional": True, "note": _BLOCKS_NOTE},
-    {"room_id": "B-004", "name": "Room B-004", "layout": _BLOCKS_LAYOUT, "available": True,
-     "provisional": True, "note": _BLOCKS_NOTE},
-    {"room_id": "B-005", "name": "Room B-005", "layout": _B005_LAYOUT, "available": True,
-     "provisional": True, "note": _B005_NOTE},
+    _spec("B-002", "B", _files_layout((2, 6), (3, 6), (2, 9)),
+          "Left file 6 benches of 2, middle file 6 benches of 3, right file 9 benches of 2, walking lane "
+          "between files. Files are drawn starting at the front."),
+    _spec("B-003", "B", _files_layout((2, 9), (3, 7), (2, 7)),
+          "Left file 9 benches of 2, middle file 7 benches of 3, right file 7 benches of 2, walking lane "
+          "between files. Files are drawn starting at the front."),
+    _spec("B-004", "B", ["11111111"] * 6,
+          "No rows: single chairs and 1-seat benches right next to each other. The real count is not known "
+          "(6 x 8 = 48 is a placeholder) and there are pillars at unknown places. Block the pillar cells and "
+          "fix the size in the Rooms tab."),
+    _spec("A-201", "A", _files_layout((3, 9), (3, 9), (1, 9)),
+          "Left file 9 benches of 3, middle file 9 benches of 3, right file 9 single-seat benches, walking "
+          "lane between files."),
+    _spec("A-202", "A", _files_layout((1, 3), (3, 5), (3, 5)),
+          "Left file 3 single-seat benches, middle file 5 benches of 3, right file 5 benches of 3 (described "
+          "as 'singular' but seating 3 each, please check), walking lane between files."),
+    _spec("A-203", "A", _files_layout((3, 5), (3, 5)),
+          "Only 2 files: 5 benches of 3 on the left, 5 benches of 3 on the right, walking lane between."),
+    _spec("A-204", "A", _files_layout((3, 8), (3, 8)),
+          "Only 2 files: 8 benches of 3 on the left, 8 benches of 3 on the right, walking lane between."),
 ]
 
 

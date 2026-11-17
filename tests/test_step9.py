@@ -78,6 +78,35 @@ class TimetableCsvTests(Base):
         self.assertIn("timetable_nov_dec_2026.csv", r.json()["detail"])
 
 
+class RoomOrderTests(Base):
+    """Rooms are opened one floor of one block at a time (ground floor first), biggest room first inside a floor."""
+
+    def test_every_session_stays_in_b_block_until_it_is_full(self):
+        self.load_everything()
+        for s in self.plan()["sessions"]:
+            self.assertEqual({r["room_id"][0] for r in s["rooms"]}, {"B"}, s["date"])
+            self.assertEqual({r["floor"] for r in s["rooms"]}, {"ground floor"})
+
+    def test_a_block_is_used_only_when_b_block_is_not_enough(self):
+        from seating import default_rooms
+        from seating.allocator import select_rooms
+        from seating.rules import get_rule
+        rooms = default_rooms()
+        rule = get_rule("fourway")
+        small = [r.room_id for r in select_rooms(rooms, {"X": 60, "Y": 40}, rule)]
+        self.assertEqual(small, ["B-003", "B-002", "B-004"])                     # biggest first inside B block
+        big = [r.room_id for r in select_rooms(rooms, {"X": 100, "Y": 60, "Z": 50}, rule)]
+        self.assertEqual(big[:3], ["B-003", "B-002", "B-004"])                   # B block is filled first
+        self.assertEqual(big[3], "A-201")                                        # then the biggest room upstairs
+
+    def test_room_zone_comes_from_the_room_code(self):
+        from seating.models import Room
+        self.assertEqual((Room("B-002", 1, 1).block, Room("B-002", 1, 1).floor), ("B", 0))
+        self.assertEqual((Room("A-201", 1, 1).block, Room("A-201", 1, 1).floor), ("A", 2))
+        self.assertEqual(Room("A-201", 1, 1).zone_label, "A block, 2nd floor")
+        self.assertEqual(Room("Room 7", 1, 1).zone_label, "")                    # no block in the code: no zone
+
+
 class NoticeListTests(Base):
     def setUp(self):
         super().setUp()
@@ -119,12 +148,23 @@ class NoticeListTests(Base):
             for block in page.split("<h2>")[1:]:
                 course = re.match(r"([A-Z0-9-]+)", block).group(1)
                 self.assertIn("&ndash;", block.split("</h2>")[0])           # course name shown
-                rows = re.findall(r'class="roll">([^<]+)</span></span><span>(B-\d+)\*?', block)
-                rolls = [r for r, _ in rows]
-                self.assertEqual(rolls, sorted(rolls, key=lambda x: (re.sub(r"\d+", "", x), int(re.sub(r"\D", "", x)))))
-                found += [(date, roll, course, room) for roll, room in rows]
+                rows = re.findall(r'class="roll">([^<]+)</td><td><b>(B-\d+|A-\d+)</b></td><td class="n">(\d+)</td><td class="n">(\d+)</td>', block)
+                # a long list is printed as two tables side by side: left one first, then the right one
+                halves = block.split('<div class="pair">')
+                rolls = [r for r, *_ in rows]
+                if len(halves) == 1:
+                    self.assertEqual(rolls, sorted(rolls, key=lambda x: (re.sub(r"\d+", "", x), int(re.sub(r"\D", "", x)))))
+                found += [(date, roll, course, room) for roll, room, _row, _seat in rows]
         self.assertEqual(len(found), len(seated))
         self.assertEqual(sorted(found), sorted((d, r, c, room) for d, r, c, room, _ in seated))
+
+    def test_course_list_starts_with_rooms_key_and_paper_by_room_table(self):
+        for page in self.pages(self.get("notice-courses").text):
+            self.assertIn("Rooms used in this session", page)
+            self.assertIn("At a glance", page)
+            self.assertIn("B block, ground floor", page)
+            self.assertIn("<th>Roll no</th><th>Room</th>", page)             # real column headings, no "R3 S5" codes
+            self.assertNotRegex(page, r"R\d+ S\d+")
 
     def test_room_list_each_student_once_under_right_room_and_course(self):
         pages = self.pages(self.get("notice-rooms").text)
@@ -133,10 +173,18 @@ class NoticeListTests(Base):
         for page in pages:
             date = re.search(r"(20\d\d-\d\d-\d\d)", page).group(1)
             for block in page.split("<h2>")[1:]:
-                room = re.match(r"Room (B-\d+)", block).group(1)
+                room = re.match(r"Room ([AB]-\d+)", block).group(1)
                 found += [(date, roll, course, room)
-                          for roll, course in re.findall(r'class="roll">([^<]+)</span></span><span>([A-Z0-9-]+) ', block)]
+                          for roll, course in re.findall(r'class="roll">([^<]+)</td><td>([A-Z0-9-]+)</td><td class="n">\d+</td>', block)]
         self.assertEqual(sorted(found), sorted((d, r, c, room) for d, r, c, room, _ in seated))
+
+    def test_room_list_goes_ground_floor_first_and_says_where_each_room_is(self):
+        for page in self.pages(self.get("notice-rooms").text):
+            order = re.findall(r"<h2>Room ([AB]-\d+)", page)
+            floors = [0 if r.startswith("B") else int(r[2]) for r in order]
+            self.assertEqual(floors, sorted(floors))
+            self.assertIn("B block, ground floor", page)
+            self.assertIn("Papers in this room:", page)
 
     def test_no_names_unless_asked(self):
         names = {n for *_, n in self.seated()}
@@ -150,7 +198,7 @@ class NoticeListTests(Base):
         for fmt in ("notice-courses", "notice-rooms"):
             text = self.get(fmt).text
             self.assertIn("PROVISIONAL", text)
-            self.assertTrue(("B-002*" in text) if fmt == "notice-courses" else ('B-002 <span class="tag">PROVISIONAL' in text))
+            self.assertIn('<b>B-002</b> <span class="tag">PROVISIONAL</span>' if fmt == "notice-courses" else 'Room B-002 <span class="tag">PROVISIONAL</span>', text)
 
     def test_unknown_format_and_empty_plan(self):
         self.assertEqual(self.client.get("/api/download/pdf").status_code, 404)

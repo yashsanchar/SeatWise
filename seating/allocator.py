@@ -1,6 +1,8 @@
 """Splits one session's students across rooms.
 
-DAA: a greedy "balanced fill". Rooms are picked largest-first until they can hold
+DAA: a greedy "balanced fill". Rooms are picked largest-first, but only inside one floor of one block
+at a time (ground floor first), so students are not sent up and down the stairs; the next floor is
+opened only when the floor before it is full. Rooms are picked until they can hold
 everybody; then each student goes to the room with the most free space left (as a
 fraction of its size) that still has room for another student of that course.
 Cost: O(N * R) for N students and R rooms.
@@ -21,12 +23,15 @@ def select_rooms(
     rule: AdjacencyRule,
     extra: int = 0,
 ) -> List[Room]:
-    """Smallest set of rooms (largest first) that can hold everyone, plus `extra` more rooms.
+    """Smallest set of rooms that can hold everyone, plus `extra` more rooms.
+
+    Order: finish one floor of one block before opening the next (ground floor first); inside a floor, the
+    biggest room first (the greedy part). Rooms whose code has no block/floor all count as one zone.
 
     Needs BOTH: enough total seats, and for every course enough 'non-touching' seats."""
     usable = sorted(
         (r for r in rooms if r.available and r.capacity > 0),
-        key=lambda r: (-r.capacity, natural_key(r.room_id)),
+        key=lambda r: (r.floor, r.block, -r.capacity, natural_key(r.room_id)),
     )
     total = sum(course_counts.values())
     limits = {r.room_id: rule.independent_capacity(r) for r in usable}

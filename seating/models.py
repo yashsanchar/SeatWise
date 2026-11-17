@@ -15,6 +15,15 @@ from .errors import DataFormatError
 
 Position = Tuple[int, int]
 
+# A room code like "B-002" or "A-201": a block letter, then three digits whose first digit is the floor
+# (0 = ground floor). Codes that do not look like this simply have no block and no floor.
+_ROOM_CODE = re.compile(r"^\s*([A-Za-z]+)\s*[-\s]?\s*(\d)(\d{2})\s*$")
+_ORDINAL = {1: "1st", 2: "2nd", 3: "3rd"}
+
+
+def floor_label(floor: int) -> str:
+    return "ground floor" if floor == 0 else f"{_ORDINAL.get(floor, str(floor) + 'th')} floor"
+
 
 def natural_key(text: str) -> List[Any]:
     """Sort key so that 'CS2' < 'CS10' (digits compared as numbers)."""
@@ -99,6 +108,22 @@ class Room:
         self._seats: List[Seat] = [
             Seat(r, c, (r, c) in self.blocked) for r in range(rows) for c in range(cols)
         ]
+
+    # ---- where the room is (worked out from the room code, nothing extra to type in) -----------
+    @property
+    def block(self) -> str:
+        m = _ROOM_CODE.match(self.room_id)
+        return m.group(1).upper() if m else ""
+
+    @property
+    def floor(self) -> int:
+        m = _ROOM_CODE.match(self.room_id)
+        return int(m.group(2)) if m else 0
+
+    @property
+    def zone_label(self) -> str:
+        """For example 'B block, ground floor'. Empty when the room code has no block."""
+        return f"{self.block} block, {floor_label(self.floor)}" if self.block else ""
 
     # ---- access -------------------------------------------------------
     def in_bounds(self, r: int, c: int) -> bool:
@@ -215,6 +240,8 @@ class SessionPlan:
                     "rows": rp.room.rows,
                     "cols": rp.room.cols,
                     "provisional": rp.room.provisional,
+                    "block": rp.room.block,
+                    "floor": floor_label(rp.room.floor) if rp.room.block else "",
                     "strategy": rp.strategy,
                     "search_nodes": rp.nodes,
                     "students": rp.room.occupied,

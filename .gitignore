@@ -1,4 +1,10 @@
 __pycache__/
 *.pyc
-.pytest_cache/
 output/
+.venv/
+venv/
+.vercel/
+.pytest_cache/
+.env
+.env.local
+.DS_Store

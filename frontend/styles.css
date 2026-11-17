@@ -100,6 +100,7 @@ main{padding-bottom:56px;min-height:60vh}
 /* ---------- form fields ---------- */
 select,input[type=text],input[type=date],textarea{font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--line-2);border-radius:var(--r-sm);padding:10px 12px;min-width:0}
 select{min-width:220px}
+select option{font-size:1rem}   /* the pop-up list of a drop-down must be as big as the box that opens it */
 select:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 input[type=checkbox]{accent-color:var(--accent);width:17px;height:17px}
 textarea{width:100%;resize:vertical;min-height:70px}

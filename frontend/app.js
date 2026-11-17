@@ -396,6 +396,7 @@ function renderPlan(mode) {
       h("span", {}, h("span", { class: "badge " + (s.ok && !s.conflicts ? "ok" : "bad") },
         !s.ok ? "Failed" : s.conflicts ? `${s.conflicts} conflicts` : "No conflicts"), ` ${s.student_count} students`)),
     s.error ? h("div", { class: "alert error" }, s.error) : null,
+    usedRoomsLine(s),
     s.warnings.length ? h("ul", { class: "warns" }, s.warnings.map(w => h("li", {}, w))) : null,
     h("div", { class: "legend" },
       s.courses.map(c => h("span", { class: "chip", "data-course": c }, h("i", { class: "sw cc", style: courseColor(c) }), `${c}${p.course_names[c] ? " " + p.course_names[c] : ""} (${counts[c] || 0})`)),
@@ -413,6 +414,14 @@ function renderPlan(mode) {
     const cur = list.children[state.current]; if (cur) cur.focus({ preventScroll: true });   // keep keyboard focus on the chosen session
   }
 }
+/* One plain line above the rooms: which rooms this session uses, where they are, and which rooms were not needed. */
+function usedRoomsLine(s) {
+  if (!s.rooms.length) return null;
+  const used = s.rooms.map(r => r.room_id), where = [...new Set(s.rooms.map(r => r.block ? `${r.block} block, ${r.floor}` : ""))].filter(Boolean);
+  const spare = ((state.data && state.data.rooms) || []).filter(r => r.available && !used.includes(r.room_id)).map(r => r.room_id);
+  return h("p", { class: "note rooms-used" }, h("b", {}, "Rooms used: "), used.join(", "), where.length ? ` (${where.join(" and ")})` : "",
+    spare.length ? `. Not needed for this session: ${spare.join(", ")}.` : ".");
+}
 function roomCard(r, rule) {
   const bad = findClashes(r, rule), free = r.seats.filter(t => t.empty).length;
   const grid = h("div", { class: "grid", style: `grid-template-columns:28px repeat(${r.cols},74px)` }, h("span"));
@@ -427,7 +436,7 @@ function roomCard(r, rule) {
   });
   return h("div", { class: "card room" },
     h("div", { class: "room-head" }, h("h3", {}, `${r.room_id} · ${r.name}`, r.provisional ? provTag() : null),
-      h("small", {}, `${r.students} students · ${r.rows}×${r.cols} · ${free} empty` + (ADVANCED ? ` · solved by ${r.strategy} (${r.search_nodes} search steps)` : ""))),
+      h("small", {}, (r.block ? `${r.block} block, ${r.floor} · ` : "") + `${r.students} students · ${r.rows}×${r.cols} · ${free} empty` + (ADVANCED ? ` · solved by ${r.strategy} (${r.search_nodes} search steps)` : ""))),
     h("div", { class: "gridscroll" }, h("div", { class: "stage" }, h("div", { class: "board" }, "FRONT OF ROOM (row 1)"), grid)),
     bad.size ? h("p", { class: "note bad" }, "Red outlines mark seats that break the rule.") : null);
 }
@@ -529,7 +538,7 @@ function renderRoomEditor() {
       await afterEdit(); showAlert("Rooms saved. Generate the seating again to use them.", "info"); }) }, "Save rooms"),
     h("button", { class: "btn", onclick: () => busy($("#rooms-save"), "Reloading…", loadRoomsTab) }, "Discard changes"),
     h("span", { class: "spacer" }),
-    h("button", { class: "btn", onclick: ev => { if (!confirm("Go back to the starting rooms (B-002 to B-005, provisional)? Your changes to the rooms will be lost.")) return;
+    h("button", { class: "btn", onclick: ev => { if (!confirm("Go back to the starting rooms (B-002 to B-004 and A-201 to A-204, provisional)? Your changes to the rooms will be lost.")) return;
       busy(ev.target, "Resetting…", async () => { setRooms((await api("/api/rooms/reset", { method: "POST" })).rooms); await afterEdit(); showAlert("Rooms reset to the starting layouts.", "info"); }); } }, "Reset to starting rooms")));
 }
 

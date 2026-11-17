@@ -60,7 +60,7 @@ class ApiTests(unittest.TestCase):
         r = self.client.post("/api/data", files={"students": sample_files()["students"]})
         self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertEqual([x["room_id"] for x in body["rooms"]], ["B-002", "B-003", "B-004", "B-005"])
+        self.assertEqual([x["room_id"] for x in body["rooms"]], ["B-002", "B-003", "B-004", "A-201", "A-202", "A-203", "A-204"])
         self.assertTrue(all(x["provisional"] for x in body["rooms"]))
         self.assertEqual(len(body["sessions"]), 12)
 
@@ -85,21 +85,21 @@ class ApiTests(unittest.TestCase):
 
     def test_rooms_get_save_reset(self):
         rooms = self.client.get("/api/rooms").json()["rooms"]
-        self.assertEqual(len(rooms), 4)
-        self.assertEqual(rooms[0]["capacity"], 39)
+        self.assertEqual(len(rooms), 7)
+        self.assertEqual(rooms[0]["capacity"], 48)
         rooms[0]["layout"][0] = "000000000"
         rooms[0]["provisional"] = False
         saved = self.client.put("/api/rooms", json={"rooms": rooms}).json()["rooms"]
-        self.assertEqual(saved[0]["capacity"], 39 - 7)
+        self.assertEqual(saved[0]["capacity"], 48 - 7)
         self.assertFalse(saved[0]["provisional"])
-        self.assertEqual(self.client.get("/api/rooms").json()["rooms"][0]["capacity"], 32)
-        self.assertEqual(self.client.post("/api/rooms/reset").json()["rooms"][0]["capacity"], 39)
+        self.assertEqual(self.client.get("/api/rooms").json()["rooms"][0]["capacity"], 41)
+        self.assertEqual(self.client.post("/api/rooms/reset").json()["rooms"][0]["capacity"], 48)
 
     def test_rooms_bad_save_is_rejected_and_keeps_old(self):
         r = self.client.put("/api/rooms", json={"rooms": [{"room_id": "A", "layout": ["000"]}]})
         self.assertEqual(r.status_code, 400)
         self.assertIn("no seats", r.json()["detail"])
-        self.assertEqual(len(self.client.get("/api/rooms").json()["rooms"]), 4)
+        self.assertEqual(len(self.client.get("/api/rooms").json()["rooms"]), 7)
 
     def test_editing_rooms_or_timetable_drops_the_old_plan(self):
         self.load_default_timetable()
@@ -117,7 +117,7 @@ class ApiTests(unittest.TestCase):
         self.client.post("/api/data", files={"students": ("students.csv", (SAMPLE / "students_placeholder.csv").read_bytes(), "text/csv")})
         rooms = self.client.get("/api/rooms").json()["rooms"]
         for r in rooms[1:]:
-            r["available"] = False                       # only B-002 (39 seats) left: 118 students cannot fit
+            r["available"] = False                       # only B-002 (48 seats) left: the big sessions cannot fit
         self.client.put("/api/rooms", json={"rooms": rooms})
         body = self.client.post("/api/plan", json={}).json()
         self.assertGreater(body["failed_sessions"], 0)
@@ -340,7 +340,7 @@ class EmptyStartTests(unittest.TestCase):
         self.assertFalse(app_module.state.has_students)
         self.assertEqual(self.client.get("/api/timetable").json(), {"rows": [], "days": 0, "sessions": 0, "warnings": []})
         rooms = self.client.get("/api/rooms").json()["rooms"]                      # the built-in rooms stay
-        self.assertEqual([x["room_id"] for x in rooms], ["B-002", "B-003", "B-004", "B-005"])
+        self.assertEqual([x["room_id"] for x in rooms], ["B-002", "B-003", "B-004", "A-201", "A-202", "A-203", "A-204"])
         self.assertEqual(self.client.get("/api/data").status_code, 409)           # nothing loaded at all
 
     def test_every_route_with_empty_state(self):
@@ -364,7 +364,7 @@ class EmptyStartTests(unittest.TestCase):
         summary = self.confirm(DUMMY_7)
         self.assertEqual((summary["students"], summary["sessions"], summary["warnings"]), (55, [], []))
         self.assertEqual([c["group"] for c in summary["cohorts"]], ["M.Tech sem 7"])
-        self.assertEqual(len(summary["rooms"]), 4)                                     # same shape as always
+        self.assertEqual(len(summary["rooms"]), 7)                                     # same shape as always
         self.assertEqual(self.client.get("/api/data").json()["students"], 55)
         for r in (self.client.post("/api/plan", json={}), self.client.get("/api/download/csv"), self.client.get("/api/compare")):
             self.assertEqual((r.status_code, r.json()["detail"]), (409, NO_TIMETABLE))
@@ -394,7 +394,7 @@ class EmptyStartTests(unittest.TestCase):
         self.assertEqual(c.get("/api/data").status_code, 409)
         self.assertEqual(c.get("/api/timetable").json()["rows"], [])
         self.assertEqual(c.get("/api/download/csv").status_code, 409)
-        self.assertEqual([x["room_id"] for x in c.get("/api/rooms").json()["rooms"]], ["B-002", "B-003", "B-004", "B-005"])
+        self.assertEqual([x["room_id"] for x in c.get("/api/rooms").json()["rooms"]], ["B-002", "B-003", "B-004", "A-201", "A-202", "A-203", "A-204"])
         self.assertEqual(c.post("/api/reset").status_code, 200)                         # also fine when already empty
 
     def test_plan_after_loading_students_and_timetable(self):

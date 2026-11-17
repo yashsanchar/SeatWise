@@ -41,13 +41,13 @@ uvicorn app:app --reload          # then open http://127.0.0.1:8000/docs  (inter
 | `GET /api/compare?rule=fourway` | runs greedy, backtracking and hybrid on every session; CSV of search steps and time side by side (advanced mode) |
 | `GET /api/benchmarks` | DAA + Computer Architecture experiments (run once, cached) |
 
-Notes: state is kept in memory (one `AppState` object), so it resets when the server restarts, and the page calls `POST /api/reset` every time it opens, so every visit starts empty. Uploads are capped at 5 MB per file.
+Notes: **the server keeps nothing between requests** (needed for Vercel, where every request runs on a fresh copy). The loaded data travels with the browser: every `/api/...` response carries the current state in the `X-Seatwise-State` header (compressed) and the page sends it back with the next request. A request without the header starts empty. Downloads are fetched by the page (not plain links) so they carry the header too; the plan is rebuilt from the data + rule + strategy. The page calls `POST /api/reset` every time it opens, so every visit starts empty. Uploads are capped at 4 MB per file (Vercel's request limit is 4.5 MB). Tests use `tests/session_client.py`, a TestClient that keeps the header like the browser does.
 If a `frontend/` folder exists, `app.py` serves it at `/`; otherwise `/` redirects to `/docs`.
 Bad files return HTTP 400 with the backend's own readable message. Tests: `tests/test_api.py` (FastAPI `TestClient`).
 
 ## Rooms and timetable (in the app)
 
-The app starts with the built-in **rooms B-002 to B-005** and **no timetable and no student lists**: the Data tab, the
+The app starts with the built-in **rooms B-002, B-003, B-004 (Block B) and A-201 to A-204 (Block A)** and **no timetable and no student lists**: the Data tab, the
 Timetable tab and the Seating plan tab are empty until you load something. The timetable comes from an upload on the Data
 tab (the Exam schedule box); `POST /api/timetable/reset` (the "Reset to printed timetable" button on a loaded timetable)
 loads the built-in printed one (12 exam days, 36 papers). Rooms and timetable are edited on their own tabs and saved with
@@ -56,9 +56,11 @@ the API answers 409 with "No student list loaded yet..." or "No exam timetable l
 * **Rooms tab**: click a seat to switch it on/off (drag to paint several, click a row/column number for a whole line),
   `+ Row` / `- Row` / `+ Column` / `- Column`, rename, "Use this room", add or delete rooms. Every built-in room is
   labelled **Provisional** (also on the seating plan and in the text download) until you tick "Layout checked against
-  the real room". B-002 to B-004: 6 x 9, three blocks (benches of 2 / 3 / 2), aisles and the back row of the middle block
-  have no seat, 39 seats. The earlier description (8 outer benches, 6 middle) differs - noted in each room's Notes box.
-  B-005 is a guess (5 x 10, 38 seats: two rows of 2-seat benches plus single flip-table chairs).
+  the real room". Rooms are described as "files" (what people call rows: a stack of benches from front to back) with a
+  walking lane (a no-seat column) between files, drawn from the front. B-002: 6 benches of 2 / 6 of 3 / 9 of 2 (48 seats).
+  B-003: 9 of 2 / 7 of 3 / 7 of 2 (53). B-004: no rows, single chairs, placeholder 6 x 8 = 48 and pillars at unknown
+  places. A-201: 9 of 3 / 9 of 3 / 9 of 1 (63). A-202: 3 of 1 / 5 of 3 / 5 of 3 (33). A-203: 5 of 3 / 5 of 3 (30).
+  A-204: 8 of 3 / 8 of 3 (48). All provisional until confirmed in the rooms.
 * **Timetable tab**: empty state ("No timetable loaded", with a button to the Data tab) until a timetable is loaded; then an editable table (date picker, time, paper code, paper name, group). Codes are cleaned on save
   (`ds6a - 201`, `DS6A – 201` -> `DS6A-201`). Papers are told apart by code; the same paper listed by two groups on the
   same day (DS6A-603) is one paper. Not listed on purpose: DS5A-623 (MBA writes one paper on 23 Nov, DS5A-621; the revised PDF prints DS5A-623 too, please confirm) and Engineering Economics.
@@ -180,3 +182,13 @@ out) and M.Tech sem 3 writes Numerical Methods for DS6A-204. DS6A-603 is one pap
   Semester Examination"). Open the file and print it (A4). Roll numbers only; `?names=1` adds names. Provisional rooms are marked
   `*` in the lists (full PROVISIONAL tag on the room headings) with a footnote. A session with many students runs onto more than one page.
 * Code: `seating/io_notice.py` (standard library only); tests in `tests/test_step9.py`.
+
+## Running on Vercel (online memory)
+Vercel runs every request on a fresh copy of the app, so a Python variable cannot remember a visitor's data.
+`seating/session_store.py` saves each visitor's state (students, lists from PDFs, rooms, timetable, rule and strategy
+names) in Upstash Redis under a random session ID kept in a cookie (`seatwise_session`, forgotten after 24 hours).
+Plans are not stored: they are rebuilt from the saved data when needed (downloads), because the solvers always give
+the same answer. If `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN` (or `KV_REST_API_URL`/`KV_REST_API_TOKEN`) are not
+set, nothing is stored online and the app keeps one state in plain memory, as on a laptop. This is a small
+remembering store, not a full database. Vercel starts the app from `app.py` (`main.py` is only the command-line tool).
+Uploads are limited to 4 MB per file because Vercel rejects request bodies over 4.5 MB. Files are only written to temporary folders.

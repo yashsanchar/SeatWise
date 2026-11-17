@@ -18,20 +18,24 @@ def spec(room_id="X1", layout=("111", "111"), **extra):
 class RoomTests(unittest.TestCase):
     def test_default_rooms(self):
         rooms = {r.room_id: r for r in default_rooms()}
-        self.assertEqual(sorted(rooms), ["B-002", "B-003", "B-004", "B-005"])
-        for rid in ("B-002", "B-003", "B-004"):
+        self.assertEqual(list(rooms), ["B-002", "B-003", "B-004", "A-201", "A-202", "A-203", "A-204"])
+        expected = {"B-002": (9, 9, 48), "B-003": (9, 9, 53), "B-004": (6, 8, 48), "A-201": (9, 9, 63),
+                    "A-202": (5, 9, 33), "A-203": (5, 7, 30), "A-204": (8, 7, 48)}
+        for rid, size in expected.items():
             r = rooms[rid]
-            self.assertEqual((r.rows, r.cols, r.capacity), (6, 9, 39))
-            self.assertTrue(r.provisional)
-            self.assertTrue(r.note)
-            # aisles (cols 3 and 7) and the back row of the middle block (cols 4-6) have no seat
-            for row in range(6):
-                self.assertFalse(r.is_usable(row, 2))
-                self.assertFalse(r.is_usable(row, 6))
-            self.assertTrue(all(not r.is_usable(5, c) for c in (3, 4, 5)))
-            self.assertTrue(all(r.is_usable(4, c) for c in (3, 4, 5)))
-        self.assertEqual(rooms["B-005"].capacity, 38)
-        self.assertTrue(rooms["B-005"].provisional)
+            self.assertEqual((r.rows, r.cols, r.capacity), size, rid)
+            self.assertTrue(r.provisional, rid)          # every room is still to be confirmed on site
+            self.assertTrue(r.note, rid)
+        # walking lanes are "no seat" columns between files: B-002 columns 3 and 7 (1-based)
+        for row in range(9):
+            self.assertFalse(rooms["B-002"].is_usable(row, 2))
+            self.assertFalse(rooms["B-002"].is_usable(row, 6))
+        # files with fewer benches start at the front: B-002 left file is 6 deep, right file 9 deep
+        self.assertTrue(rooms["B-002"].is_usable(5, 0) and not rooms["B-002"].is_usable(6, 0))
+        self.assertTrue(rooms["B-002"].is_usable(8, 7))
+        # two-file rooms have a single lane
+        self.assertFalse(rooms["A-203"].is_usable(0, 3))
+        self.assertTrue(all(rooms["A-204"].is_usable(r, c) for r in range(8) for c in (0, 1, 2, 4, 5, 6)))
 
     def test_spec_round_trip(self):
         for room in default_rooms():

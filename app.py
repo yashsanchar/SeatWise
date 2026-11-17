@@ -20,20 +20,26 @@ The routes are thin: all real work is done by the `seating` package.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import RedirectResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from seating import (ExamData, ExamPlanner, SeatingError, SessionPlan, build_sessions, combine,
+from seating import (ExamData, Student, ExamPlanner, SeatingError, SessionPlan, build_sessions, combine,
                      default_rooms, default_timetable, expand_cohorts, export_comparison_csv, export_course_list, export_csv, export_json,
                      export_room_list, export_text, find_conflicts, get_rule, get_strategy, load_rooms, load_schedule_rows,
                      load_students, room_to_spec, rooms_from_specs, rows_from_sessions, rule_names, strategy_names,
                      timetable_groups, timetable_rows_clean)
+from seating.presets import DEFAULT_ROOM_SPECS
+from seating import session_store
 from seating import benchmarks
 import pdf_import
 from pdf_import import PdfProblem
@@ -41,7 +47,7 @@ from pdf_import import PdfProblem
 BASE = Path(__file__).parent
 SAMPLE = BASE / "data" / "sample"
 FRONTEND = BASE / "frontend"
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB per file is far more than a college needs
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024  # Vercel rejects request bodies over 4.5 MB, so keep each file under 4 MB
 
 
 # --------------------------------------------------------------------------- state (OOP)
@@ -109,14 +115,108 @@ class AppState:
 
     def require_plan(self) -> ExamData:
         data = self.require_data()
+        self.ensure_plans()
         if not self.plans:
             raise HTTPException(409, "No plan yet. Generate one with POST /api/plan first.")
         return data
 
 
+    # ------------------------------------------------------------------ stateless hosting (Vercel)
+    # A serverless host runs every request on a fresh copy of the program, so nothing can live in memory
+    # between clicks. When an online store is set up, each visitor's state is saved there under a random
+    # session ID (kept in a cookie) and loaded again at the start of the next request.
+    def dump(self) -> str:
+        """The whole state as one compact text string. The plan itself is not stored: it is rebuilt
+        from the data + rule + strategy when a download needs it (the solvers give the same answer every time)."""
+        out: Dict[str, Any] = {}
+        if self.students is not None:
+            people: Dict[tuple, List[str]] = {}
+            for st in self.students[0]:
+                people.setdefault((st.roll_no, st.name), []).append(st.course)
+            out["s"] = {"p": [[roll, name, courses] for (roll, name), courses in people.items()],
+                        "n": self.students[1], "w": list(self.students[2])}
+        if self.cohorts:
+            out["c"] = {g: [list(p) for p in people] for g, people in self.cohorts.items()}
+        specs = [_room_core(room_to_spec(r)) for r in self.rooms]
+        if specs != [_room_core(x) for x in DEFAULT_ROOM_SPECS]:
+            out["r"] = specs
+        if self.timetable:
+            out["t"] = "default" if self.timetable == default_timetable() else self.timetable
+        if self.rule_name:
+            out["u"], out["y"] = self.rule_name, self.strategy_name
+        raw = json.dumps(out, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        return base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode("ascii").rstrip("=")
+
+    def load(self, token: Optional[str]) -> None:
+        """Rebuild the state from a dump() string. No token, or a damaged one, gives the empty start."""
+        self.reset()
+        if not token:
+            return
+        try:
+            raw = zlib.decompress(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+            d = json.loads(raw.decode("utf-8"))
+            if "s" in d:
+                sts = [Student(roll, name, course) for roll, name, courses in d["s"]["p"] for course in courses]
+                self.students = (sts, dict(d["s"]["n"]), list(d["s"]["w"]))
+            if "c" in d:
+                self.cohorts = {g: [(p[0], p[1], bool(p[2])) for p in people] for g, people in d["c"].items()}
+            if "r" in d:
+                self.rooms = rooms_from_specs(d["r"])
+            if "t" in d:
+                self.timetable = default_timetable() if d["t"] == "default" else [dict(r) for r in d["t"]]
+            self.rule_name, self.strategy_name = d.get("u", ""), d.get("y", "")
+        except Exception:                      # a damaged or old token must never crash a request
+            self.reset()
+
+    def ensure_plans(self) -> None:
+        """Rebuild the latest plan when only its settings travelled with the request (downloads)."""
+        if self.plans or not self.rule_name or not self.has_students or not self.timetable:
+            return
+        data = self.data
+        self.plans = ExamPlanner(data, get_rule(self.rule_name), get_strategy(self.strategy_name)).plan_all()
+
+
 state = AppState()
 app = FastAPI(title="SeatWise API",
               description="No two students of the same course sit beside each other.")
+
+
+SESSION_COOKIE = "seatwise_session"
+store = session_store.store_from_environment()      # None on a laptop: the app then keeps state in plain memory
+_state_lock = asyncio.Lock()          # one request at a time: the single AppState is loaded from the store for each
+
+
+def _room_core(spec: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: spec[k] for k in ("room_id", "name", "layout", "available", "provisional", "note")}
+
+
+_EMPTY_DUMP = AppState().dump()          # what a brand-new visitor's state looks like when saved
+
+
+@app.middleware("http")
+async def remember_visitor(request: Request, call_next):
+    """With an online store: load this visitor's saved state before the route runs, save it afterwards.
+    Without one: do nothing (the plain in-memory state is used, exactly as on a laptop)."""
+    if store is None or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    session_id = request.cookies.get(SESSION_COOKIE)
+    fresh = not session_store.valid_session_id(session_id)
+    if fresh:
+        session_id = session_store.new_session_id()
+    async with _state_lock:
+        try:
+            saved = None if fresh else await asyncio.to_thread(store.get, session_id)
+            state.load(saved)
+            response = await call_next(request)
+            now = state.dump()
+            if now != (saved if saved is not None else _EMPTY_DUMP):
+                await asyncio.to_thread(store.put, session_id, now)
+        except session_store.StoreError as exc:
+            return JSONResponse({"detail": f"The online memory is not working right now: {exc}. Please try again."}, status_code=503)
+    if fresh:
+        response.set_cookie(SESSION_COOKIE, session_id, max_age=session_store.SESSION_TTL_SECONDS, httponly=True,
+                            samesite="lax", secure=request.headers.get("x-forwarded-proto", request.url.scheme) == "https")
+    return response
 
 
 class RoomsBody(BaseModel):
@@ -501,6 +601,23 @@ def get_benchmarks() -> dict:
         "note": "Python's interpreter overhead hides most cache effects; the direction of the "
                 "results is visible but the gaps are smaller than they would be in C or Java.",
     }
+
+
+@app.get("/api/health")
+def health() -> dict:
+    """Open this address in the browser to see whether the online memory (Upstash) is set up and working.
+    On Vercel the answer must say 'working': true, otherwise data will not survive from one click to the next."""
+    if store is None:
+        return {"online_store": False, "working": False,
+                "message": "No online store is set up. That is fine on a laptop, but on Vercel the loaded data would be "
+                           "forgotten after every click. Add the Upstash settings in Vercel and deploy again."}
+    try:
+        store.put("health-check", "ok")
+        if store.get("health-check") != "ok":
+            raise session_store.StoreError("the test value did not come back")
+    except session_store.StoreError as exc:
+        return {"online_store": True, "working": False, "message": f"The online store is set up but not working: {exc}"}
+    return {"online_store": True, "working": True, "message": "The online store is working. Loaded data is remembered between clicks."}
 
 
 @app.post("/api/reset")

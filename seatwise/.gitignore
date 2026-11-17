@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+output/
+.venv/
+venv/
+.vercel/
+.pytest_cache/
+.env
+.env.local
+.DS_Store

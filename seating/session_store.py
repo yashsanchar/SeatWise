@@ -67,11 +67,15 @@ class RedisStore:
 
 def store_from_environment(env: Optional[Dict[str, str]] = None) -> Optional[RedisStore]:
     """Build the store from environment variables, or None (plain memory) when they are not set.
-    Vercel's Upstash integration names them KV_REST_API_URL / KV_REST_API_TOKEN (older projects) or
-    UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN; both pairs are understood."""
+    Vercel's Upstash integration names them <PREFIX>KV_REST_API_URL / <PREFIX>KV_REST_API_TOKEN, where the prefix
+    can be empty (older projects) or something like STORAGE_ (what Vercel adds by default today). The plain
+    UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN pair is understood too. The "read only" token is never used."""
     env = os.environ if env is None else env
-    for url_name, token_name in (("UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"),
-                                 ("KV_REST_API_URL", "KV_REST_API_TOKEN")):
+    pairs = [("UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"), ("KV_REST_API_URL", "KV_REST_API_TOKEN")]
+    for name in sorted(env):                                     # any prefix: STORAGE_KV_REST_API_URL, MYDB_KV_REST_API_URL ...
+        if name.endswith("_KV_REST_API_URL"):
+            pairs.append((name, name[: -len("URL")] + "TOKEN"))
+    for url_name, token_name in pairs:
         url, token = env.get(url_name, "").strip(), env.get(token_name, "").strip()
         if url and token:
             return RedisStore(url, token)

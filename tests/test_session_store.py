@@ -62,6 +62,13 @@ class StoreClientTests(unittest.TestCase):
         self.assertEqual(ss.store_from_environment({"KV_REST_API_URL": "https://x/", "KV_REST_API_TOKEN": "t"}).url, "https://x")
         self.assertEqual(ss.store_from_environment({"UPSTASH_REDIS_REST_URL": "https://y", "UPSTASH_REDIS_REST_TOKEN": "t"}).url, "https://y")
 
+    def test_vercel_prefixed_names_and_read_only_token(self):
+        env = {"STORAGE_KV_REST_API_READ_ONLY_TOKEN": "ro", "STORAGE_KV_REST_API_TOKEN": "rw",
+               "STORAGE_KV_REST_API_URL": "https://z/", "STORAGE_REDIS_URL": "rediss://nope"}
+        store = ss.store_from_environment(env)
+        self.assertEqual((store.url, store.token), ("https://z", "rw"))                  # the read-write token, never the read-only one
+        self.assertIsNone(ss.store_from_environment({"STORAGE_KV_REST_API_URL": "https://z", "STORAGE_KV_REST_API_READ_ONLY_TOKEN": "ro"}))
+
     def test_session_ids(self):
         a, b = ss.new_session_id(), ss.new_session_id()
         self.assertNotEqual(a, b)
